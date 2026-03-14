@@ -40,6 +40,18 @@ class DisplayOptions:
     json_output: bool = False
 
 
+_sampler_cache: dict[str, Any] = {}
+
+
+def _get_sampler(groups: list[str]) -> Any:
+    """Get or create a cached IOReport sampler for the given groups."""
+    key = ",".join(sorted(groups))
+    if key not in _sampler_cache:
+        from metalstat.ioreport import IOReportSampler
+        _sampler_cache[key] = IOReportSampler(groups=groups)
+    return _sampler_cache[key]
+
+
 @dataclass
 class AppleSiliconStat:
     """A snapshot of Apple Silicon system metrics."""
@@ -72,15 +84,13 @@ class AppleSiliconStat:
 
         if query_gpu or query_power:
             try:
-                from metalstat.ioreport import IOReportSampler
-
                 groups = []
                 if query_gpu:
                     groups.append("GPU Stats")
                 if query_power:
                     groups.append("Energy Model")
 
-                sampler = IOReportSampler(groups=groups)
+                sampler = _get_sampler(groups)
                 t0 = time.monotonic()
                 channels = sampler.sample_delta(interval=sample_duration)
                 duration_ms = (time.monotonic() - t0) * 1000
@@ -90,7 +100,7 @@ class AppleSiliconStat:
                     gpu_metrics = parse_gpu_metrics(channels, gpu_freqs_mhz=gpu_freqs)
                 if query_power:
                     power_metrics = parse_power_metrics(channels, duration_ms)
-            except Exception as e:
+            except Exception:
                 # IOReport unavailable — degrade gracefully
                 if query_gpu:
                     gpu_metrics = GPUMetrics(

@@ -181,10 +181,13 @@ def _watch_loop(args: argparse.Namespace, opts: DisplayOptions) -> None:
     try:
         with term.fullscreen(), term.hidden_cursor():
             while not stop:
+                t0 = time.monotonic()
                 print(term.home + term.clear, end="")
                 _query_and_print(args, opts)
-                # Sleep in small increments to respond to Ctrl+C quickly
-                deadline = time.monotonic() + interval
+                # Account for time spent querying (IOReport sampling takes ~200ms)
+                elapsed = time.monotonic() - t0
+                remaining = max(0, interval - elapsed)
+                deadline = time.monotonic() + remaining
                 while time.monotonic() < deadline and not stop:
                     time.sleep(min(0.1, deadline - time.monotonic()))
     except KeyboardInterrupt:
