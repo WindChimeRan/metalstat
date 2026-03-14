@@ -80,21 +80,22 @@ def _get_metal_info() -> tuple[int | None, int | None, str | None]:
         if device:
             rec_max = device.recommendedMaxWorkingSetSize()
             cur_alloc = device.currentAllocatedSize()
-            # Metal family detection
+            # GPU family detection (hardware capability tier)
             family = None
-            # Try common families (Metal 3, Apple family 9, etc.)
             try:
-                # MTLGPUFamily values
-                if device.supportsFamily_(1009):  # MTLGPUFamilyApple9
-                    family = "Metal 3, Apple Family 9"
-                elif device.supportsFamily_(1008):  # MTLGPUFamilyApple8
-                    family = "Metal 3, Apple Family 8"
-                elif device.supportsFamily_(1007):  # MTLGPUFamilyApple7
-                    family = "Metal 2, Apple Family 7"
-                else:
-                    family = "Metal"
+                # MTLGPUFamily enum values (Apple-specific families)
+                # Probe from highest to lowest
+                families = [
+                    (1009, "Apple Family 9"),   # M3/M4
+                    (1008, "Apple Family 8"),   # M2
+                    (1007, "Apple Family 7"),   # M1
+                ]
+                for val, label in families:
+                    if device.supportsFamily_(val):
+                        family = label
+                        break
             except Exception:
-                family = "Metal"
+                pass
             return rec_max, cur_alloc, family
     except ImportError:
         pass
