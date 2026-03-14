@@ -342,25 +342,31 @@ Not all metrics are available on all systems. metalstat should degrade gracefull
 
 ## 5. Key Implementation Details
 
-### 5.1 IOReport Channel Parsing
+### 5.1 IOReport Channel Parsing (Actual Implementation)
 
-The IOReport delta samples return CFDictionary trees. Extracting values requires walking the tree:
+The IOReport delta samples return CFDictionary trees with an `IOReportChannels` CFArray.
+Each channel is a CFDictionary with group, subgroup, name, format, and values.
 
-```python
-# Pseudocode for GPU utilization from IOReport delta
-def parse_gpu_stats(delta):
-    # IOReportIterateOverChannelItems iterates over channels
-    # Each channel has: group, subgroup, channel_name, and value(s)
-    # For "GPU Stats" group:
-    #   - "GPU Active" residency channels give utilization
-    #   - Frequency state residency gives current frequency
+**GPU utilization** comes from the `GPUPH` channel in group `GPU Stats`, subgroup
+`GPU Performance States`. It has state-format data with states `OFF, P1, P2, ..., P15`.
+Utilization = sum(active P-state residencies) / sum(all residencies).
 
-    gpu_active = 0.0
-    for channel in iterate_channels(delta, group="GPU Stats"):
-        if "GPU Active" in channel.name:
-            gpu_active = channel.value  # fraction 0.0-1.0
-    return gpu_active * 100  # percentage
-```
+**GPU frequency** uses the DVFS table from the IORegistry `sgx` device tree node.
+The `perf-states` property contains `(u32 freq_hz, u32 voltage_mv)` pairs. P-state
+indices map to sorted ascending frequencies (P1 = lowest).
+
+**Power** comes from `Energy Model` channels with specific names:
+- `CPU Energy` (unit: mJ) — total CPU energy
+- `GPU0` (unit: mJ) — GPU energy
+- `ANE0` (unit: mJ) — Neural Engine energy
+- `DRAM0` (unit: mJ) — DRAM energy
+
+Power (W) = energy (mJ) / duration (s) / 1000.
+
+**Critical implementation note:** `IOReportCreateSamples` requires the `sub_channels`
+output dictionary from `IOReportCreateSubscription` as its second argument. Passing
+`None` causes it to return NULL. The `IOReportSimpleGetIntegerValue` second arg is
+`c_int32` (field index, usually 0), not a pointer.
 
 ### 5.2 Color Scheme
 
@@ -439,28 +445,32 @@ Python 3.9+ (matching macOS system Python on modern macOS).
 
 ---
 
-## 8. Implementation Phases
+## 8. Implementation Status
 
-### Phase 1 — MVP (Core metrics, no IOReport)
-- System info via sysctl + Metal API
-- Memory via psutil
-- GPU memory via Metal API
-- Basic CLI with `--json`, `--no-color`, watch mode
-- Output: `Apple M4 Pro | 12.3 / 18.0 GB | Metal: 0.8G / 13.5G | Pressure: ●green`
+### Phase 1 — MVP [DONE]
+- [x] System info via sysctl + Metal API
+- [x] Memory via psutil (wired/active/inactive/compressed)
+- [x] GPU memory via Metal API (currentAllocatedSize / recommendedMaxWorkingSetSize)
+- [x] Basic CLI with `--json`, `--no-color`, `--no-header`, watch mode
+- [x] Memory pressure detection
 
-### Phase 2 — IOReport Integration (GPU utilization + power)
-- Bind IOReport via ctypes
-- GPU utilization and frequency from "GPU Stats"
-- Power metrics from "Energy Model"
-- CPU utilization from psutil (per-core)
-- Full one-liner output with all Tier 1 metrics
+### Phase 2 — IOReport Integration [DONE]
+- [x] IOReport ctypes bindings (libIOReport.dylib)
+- [x] GPU utilization from "GPU Stats" GPUPH channel (P-state residency)
+- [x] GPU frequency from IORegistry DVFS table (sgx device tree perf-states)
+- [x] Power metrics from "Energy Model" (CPU Energy, GPU0, ANE0, DRAM0)
+- [x] CPU utilization from psutil with P/E cluster breakdown
+- [x] IOReport sampler caching across queries
+- [x] Unit-aware energy conversion (mJ/nJ)
 
-### Phase 3 — Polish
-- CPU per-cluster utilization via IOReport "CPU Stats"
-- Temperature via compiled helper (optional)
-- Shell completions
-- Comprehensive error handling and graceful degradation
-- PyPI release
+### Phase 3 — Polish [PARTIAL]
+- [x] Graceful degradation when IOReport/Metal unavailable
+- [x] Auto-detect TTY for color output
+- [x] README with usage examples
+- [ ] Temperature via IOHIDEventSystemClient compiled helper
+- [ ] Shell completions (bash/zsh/fish)
+- [ ] PyPI release
+- [ ] Tests
 
 ---
 
