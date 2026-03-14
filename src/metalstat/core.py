@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import IO, Any
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -185,8 +186,9 @@ class AppleSiliconStat:
         console.print(parts)
 
     def _print_detailed(self, console: Console, opts: DisplayOptions) -> None:
-        """Table layout when detail flags are on."""
+        """Table layout with separator lines between logical sections."""
         mem = self.memory
+        rule_style = "dim"
 
         # Header
         if opts.header:
@@ -213,19 +215,20 @@ class AppleSiliconStat:
             + Text("  " + " / ".join(core_parts), style="dim")
         )
 
-        # Build the metrics table
-        table = Table(
-            show_header=False,
-            show_edge=False,
-            show_lines=False,
-            box=None,
-            padding=(0, 1),
-            pad_edge=False,
-        )
-        table.add_column("label", style="bold", justify="right", min_width=8)
-        table.add_column("value", no_wrap=True)
+        # Helper to create a section table (consistent column layout)
+        def _section() -> Table:
+            t = Table(
+                show_header=False, show_edge=False, show_lines=False,
+                box=None, padding=(0, 1), pad_edge=False,
+            )
+            t.add_column("label", style="bold", justify="right", min_width=8)
+            t.add_column("value", no_wrap=True)
+            return t
 
-        # GPU row
+        # --- Compute section (GPU + CPU) ---
+        console.print(Rule(style=rule_style))
+        compute = _section()
+
         if self.gpu and self.gpu.available:
             val = Text()
             val.append_text(_styled_pct(self.gpu.utilization or 0, low=30, high=80))
@@ -234,11 +237,10 @@ class AppleSiliconStat:
             if opts.show_power and self.power and self.power.gpu_w is not None:
                 val.append("   ")
                 val.append_text(_styled_power(self.power.gpu_w))
-            table.add_row("GPU", val)
+            compute.add_row("GPU", val)
         elif self.gpu is not None:
-            table.add_row("GPU", Text("unavailable", style="dim"))
+            compute.add_row("GPU", Text("unavailable", style="dim"))
 
-        # CPU row
         if opts.show_cpu and self.cpu:
             val = Text()
             val.append_text(_styled_pct(self.cpu.utilization_total, low=50, high=85))
@@ -253,16 +255,20 @@ class AppleSiliconStat:
             if opts.show_power and self.power and self.power.cpu_w is not None:
                 val.append("   ")
                 val.append_text(_styled_power(self.power.cpu_w))
-            table.add_row("CPU", val)
+            compute.add_row("CPU", val)
 
-        # Memory row
+        console.print(compute)
+
+        # --- Memory section ---
+        console.print(Rule(style=rule_style))
+        memory_tbl = _section()
+
         mem_val = Text()
         mem_val.append(f"{bytes_to_gib(mem.used):.1f} / {bytes_to_gib(mem.total):.1f} GB")
         mem_val.append("   ")
         mem_val.append_text(_styled_pressure(mem.pressure_level))
-        table.add_row("Memory", mem_val)
+        memory_tbl.add_row("Memory", mem_val)
 
-        # Memory detail sub-row
         if opts.show_memory_detail:
             detail = Text()
             detail.append(f"{format_gib(mem.wired)}G ")
@@ -273,23 +279,24 @@ class AppleSiliconStat:
             detail.append("inactive", style="dim")
             detail.append(f" / {format_gib(mem.compressed)}G ")
             detail.append("compressed", style="dim")
-            table.add_row("", detail)
+            memory_tbl.add_row("", detail)
 
-        # Metal row
         if opts.show_gpu_mem and mem.metal_recommended_max > 0:
-            table.add_row(
+            memory_tbl.add_row(
                 "Metal",
                 f"{format_gib(mem.metal_allocated)}G / {format_gib(mem.metal_recommended_max)}G",
             )
 
-        # Swap row
         if opts.show_swap:
-            table.add_row(
+            memory_tbl.add_row(
                 "Swap",
                 f"{format_gib(mem.swap_used)}G / {format_gib(mem.swap_total)}G",
             )
 
-        # Power row
+        console.print(memory_tbl)
+
+        # --- Power section ---
+        has_power_row = False
         if opts.show_power and self.power and self.power.available:
             pw = self.power
             val = Text()
@@ -310,13 +317,19 @@ class AppleSiliconStat:
                     val.append_text(_styled_power(watts))
                     first = False
             if not first:
-                table.add_row("Power", val)
-        elif opts.show_ane and self.power and self.power.ane_w is not None:
+                console.print(Rule(style=rule_style))
+                power_tbl = _section()
+                power_tbl.add_row("Power", val)
+                console.print(power_tbl)
+                has_power_row = True
+
+        if not has_power_row and opts.show_ane and self.power and self.power.ane_w is not None:
+            console.print(Rule(style=rule_style))
+            ane_tbl = _section()
             val = Text()
             val.append_text(_styled_power(self.power.ane_w))
-            table.add_row("ANE", val)
-
-        console.print(table)
+            ane_tbl.add_row("ANE", val)
+            console.print(ane_tbl)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-serializable dictionary."""
