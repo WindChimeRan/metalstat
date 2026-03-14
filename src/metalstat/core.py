@@ -16,7 +16,7 @@ from metalstat.cpu import CPUMetrics, get_cpu_metrics
 from metalstat.gpu import GPUMetrics, parse_gpu_metrics
 from metalstat.memory import MemoryMetrics, get_memory_metrics
 from metalstat.power import PowerMetrics, parse_power_metrics
-from metalstat.sysinfo import ChipInfo, get_chip_info, is_apple_silicon
+from metalstat.sysinfo import ChipInfo, get_chip_info, get_gpu_dvfs_freqs, is_apple_silicon
 from metalstat.util import (
     bytes_to_gib,
     colored_percent,
@@ -86,7 +86,8 @@ class AppleSiliconStat:
                 duration_ms = (time.monotonic() - t0) * 1000
 
                 if query_gpu:
-                    gpu_metrics = parse_gpu_metrics(channels)
+                    gpu_freqs = get_gpu_dvfs_freqs()
+                    gpu_metrics = parse_gpu_metrics(channels, gpu_freqs_mhz=gpu_freqs)
                 if query_power:
                     power_metrics = parse_power_metrics(channels, duration_ms)
             except Exception as e:
