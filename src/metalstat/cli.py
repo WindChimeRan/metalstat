@@ -124,7 +124,6 @@ def _determine_color(args: argparse.Namespace) -> bool:
         return True
     if args.json_output:
         return False
-    # Auto-detect: color if stdout is a TTY
     return sys.stdout.isatty()
 
 
@@ -163,13 +162,20 @@ def _query_and_print(args: argparse.Namespace, opts: DisplayOptions) -> None:
 
 
 def _watch_loop(args: argparse.Namespace, opts: DisplayOptions) -> None:
-    """Watch mode: clear screen and refresh at interval."""
-    import blessed
+    """Watch mode using rich Live display."""
+    from io import StringIO
 
-    term = blessed.Terminal()
+    from rich.console import Console
+    from rich.live import Live
+    from rich.text import Text
+
     interval = args.interval
+    console = Console(
+        force_terminal=opts.color if opts.color else None,
+        no_color=not opts.color,
+        highlight=False,
+    )
 
-    # Handle Ctrl+C gracefully
     stop = False
 
     def on_sigint(sig, frame):
@@ -178,13 +184,27 @@ def _watch_loop(args: argparse.Namespace, opts: DisplayOptions) -> None:
 
     signal.signal(signal.SIGINT, on_sigint)
 
+    needs_gpu = True
+    needs_power = opts.show_power or opts.show_ane
+    needs_cpu = opts.show_cpu
+
     try:
-        with term.fullscreen(), term.hidden_cursor():
+        with Live(console=console, refresh_per_second=4, screen=True) as live:
             while not stop:
                 t0 = time.monotonic()
-                print(term.home + term.clear, end="")
-                _query_and_print(args, opts)
-                # Account for time spent querying (IOReport sampling takes ~200ms)
+
+                stat = AppleSiliconStat.new_query(
+                    sample_duration=args.sample_duration,
+                    query_cpu=needs_cpu,
+                    query_gpu=needs_gpu,
+                    query_power=needs_power,
+                )
+
+                # Render to a string buffer, then display via Live
+                buf = StringIO()
+                stat.print_formatted(opts, fp=buf)
+                live.update(Text.from_ansi(buf.getvalue()))
+
                 elapsed = time.monotonic() - t0
                 remaining = max(0, interval - elapsed)
                 deadline = time.monotonic() + remaining

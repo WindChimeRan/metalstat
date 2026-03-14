@@ -6,24 +6,20 @@ import json
 import socket
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from typing import IO, Any
 
-import blessed
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 from metalstat.cpu import CPUMetrics, get_cpu_metrics
 from metalstat.gpu import GPUMetrics, parse_gpu_metrics
 from metalstat.memory import MemoryMetrics, get_memory_metrics
 from metalstat.power import PowerMetrics, parse_power_metrics
 from metalstat.sysinfo import ChipInfo, get_chip_info, get_gpu_dvfs_freqs, is_apple_silicon
-from metalstat.util import (
-    bytes_to_gib,
-    colored_percent,
-    colored_power,
-    format_gib,
-    pressure_indicator,
-)
+from metalstat.util import bytes_to_gib, format_gib, pct_style, pressure_style
 
 
 @dataclass
@@ -50,6 +46,23 @@ def _get_sampler(groups: list[str]) -> Any:
         from metalstat.ioreport import IOReportSampler
         _sampler_cache[key] = IOReportSampler(groups=groups)
     return _sampler_cache[key]
+
+
+# --- Rich helpers ---
+
+def _styled_pct(value: float, low: float = 30.0, high: float = 80.0) -> Text:
+    """Create a colored percentage Text."""
+    style = pct_style(value, low, high)
+    return Text(f"{value:5.1f}%", style=style)
+
+
+def _styled_power(value: float) -> Text:
+    return Text(f"{value:.1f}W", style="magenta")
+
+
+def _styled_pressure(level: str) -> Text:
+    style = pressure_style(level)
+    return Text(f"●{level}", style=style)
 
 
 @dataclass
@@ -101,7 +114,6 @@ class AppleSiliconStat:
                 if query_power:
                     power_metrics = parse_power_metrics(channels, duration_ms)
             except Exception:
-                # IOReport unavailable — degrade gracefully
                 if query_gpu:
                     gpu_metrics = GPUMetrics(
                         utilization=None, frequency_mhz=None, available=False,
@@ -130,66 +142,58 @@ class AppleSiliconStat:
         opts: DisplayOptions,
         fp: IO[str] = sys.stdout,
     ) -> None:
-        """Print formatted, colored output."""
-        term = blessed.Terminal()
-        if not opts.color:
-            term = blessed.Terminal(force_styling=False)
+        """Print formatted output using rich."""
+        console = Console(
+            file=fp,
+            force_terminal=opts.color if opts.color else None,
+            no_color=not opts.color,
+            highlight=False,
+        )
 
         if self._is_detailed(opts):
-            self._print_detailed(term, opts, fp)
+            self._print_detailed(console, opts)
         else:
-            self._print_oneliner(term, opts, fp)
+            self._print_oneliner(console, opts)
 
-    def _print_oneliner(
-        self,
-        term: blessed.Terminal,
-        opts: DisplayOptions,
-        fp: IO[str],
-    ) -> None:
+    def _print_oneliner(self, console: Console, opts: DisplayOptions) -> None:
         """Compact one-liner output (default, no detail flags)."""
-        lines: list[str] = []
-
         if opts.header:
             ts = self.query_time.strftime("%Y-%m-%d %H:%M:%S")
-            lines.append(f"{term.bold(self.hostname)}  {ts}")
+            console.print(f"[bold]{self.hostname}[/]  {ts}")
 
-        parts: list[str] = [term.bold_cyan(self.chip.name)]
+        parts = Text()
+        parts.append(self.chip.name, style="bold cyan")
 
+        # GPU
         if self.gpu and self.gpu.available:
-            gpu_str = "GPU " + colored_percent(
-                term, self.gpu.utilization or 0, low=30, high=80,
-            )
+            parts.append(" | GPU ")
+            parts.append_text(_styled_pct(self.gpu.utilization or 0, low=30, high=80))
             if self.gpu.frequency_mhz:
-                gpu_str += f", {self.gpu.frequency_mhz} MHz"
-            parts.append(gpu_str)
+                parts.append(f", {self.gpu.frequency_mhz} MHz")
         elif self.gpu is not None:
-            parts.append("GPU " + term.dim("??"))
+            parts.append(" | GPU ")
+            parts.append("??", style="dim")
 
+        # Memory
         mem = self.memory
-        parts.append(f"{bytes_to_gib(mem.used):.1f} / {bytes_to_gib(mem.total):.1f} GB")
-        parts.append("Pressure: " + pressure_indicator(term, mem.pressure_level))
+        parts.append(f" | {bytes_to_gib(mem.used):.1f} / {bytes_to_gib(mem.total):.1f} GB")
 
-        lines.append(" | ".join(parts))
-        print("\n".join(lines), file=fp)
+        # Pressure
+        parts.append(" | Pressure: ")
+        parts.append_text(_styled_pressure(mem.pressure_level))
 
-    def _print_detailed(
-        self,
-        term: blessed.Terminal,
-        opts: DisplayOptions,
-        fp: IO[str],
-    ) -> None:
-        """Table-like multi-line output when detail flags are on."""
-        L = 10  # label column width
-        lines: list[str] = []
+        console.print(parts)
+
+    def _print_detailed(self, console: Console, opts: DisplayOptions) -> None:
+        """Table layout when detail flags are on."""
         mem = self.memory
 
         # Header
         if opts.header:
             ts = self.query_time.strftime("%Y-%m-%d %H:%M:%S")
-            lines.append(f"{term.bold(self.hostname)}  {ts}")
+            console.print(f"[bold]{self.hostname}[/]  {ts}")
 
-        # Chip title line
-        chip_str = term.bold_cyan(self.chip.name)
+        # Chip title
         core_parts: list[str] = []
         if self.chip.cpu_cores_performance > 0 and self.chip.cpu_cores_efficiency > 0:
             core_parts.append(
@@ -203,91 +207,116 @@ class AppleSiliconStat:
             core_parts.append(f"{self.chip.gpu_cores}C GPU")
         if self.chip.metal_family:
             core_parts.append(self.chip.metal_family)
-        lines.append(f"{chip_str}  {term.dim(' / '.join(core_parts))}")
+
+        console.print(
+            Text(self.chip.name, style="bold cyan")
+            + Text("  " + " / ".join(core_parts), style="dim")
+        )
+
+        # Build the metrics table
+        table = Table(
+            show_header=False,
+            show_edge=False,
+            show_lines=False,
+            box=None,
+            padding=(0, 1),
+            pad_edge=False,
+        )
+        table.add_column("label", style="bold", justify="right", min_width=8)
+        table.add_column("value", no_wrap=True)
 
         # GPU row
         if self.gpu and self.gpu.available:
-            val = colored_percent(term, self.gpu.utilization or 0, low=30, high=80)
-            cells = [val]
+            val = Text()
+            val.append_text(_styled_pct(self.gpu.utilization or 0, low=30, high=80))
             if self.gpu.frequency_mhz:
-                cells.append(f"{self.gpu.frequency_mhz:>5d} MHz")
+                val.append(f"   {self.gpu.frequency_mhz:>5d} MHz")
             if opts.show_power and self.power and self.power.gpu_w is not None:
-                cells.append(colored_power(term, self.power.gpu_w))
-            lines.append(f"  {term.bold('GPU'):>{L}}   {'   '.join(cells)}")
+                val.append("   ")
+                val.append_text(_styled_power(self.power.gpu_w))
+            table.add_row("GPU", val)
         elif self.gpu is not None:
-            lines.append(f"  {term.bold('GPU'):>{L}}   {term.dim('unavailable')}")
+            table.add_row("GPU", Text("unavailable", style="dim"))
 
         # CPU row
         if opts.show_cpu and self.cpu:
-            val = colored_percent(term, self.cpu.utilization_total, low=50, high=85)
-            cells = [val]
+            val = Text()
+            val.append_text(_styled_pct(self.cpu.utilization_total, low=50, high=85))
             if (
                 self.cpu.utilization_p_cluster is not None
                 and self.cpu.utilization_e_cluster is not None
             ):
-                cells.append(
-                    f"P: {self.cpu.utilization_p_cluster:4.0f}%   "
-                    f"E: {self.cpu.utilization_e_cluster:4.0f}%"
+                val.append(
+                    f"   P: {self.cpu.utilization_p_cluster:4.0f}%"
+                    f"   E: {self.cpu.utilization_e_cluster:4.0f}%"
                 )
             if opts.show_power and self.power and self.power.cpu_w is not None:
-                cells.append(colored_power(term, self.power.cpu_w))
-            lines.append(f"  {term.bold('CPU'):>{L}}   {'   '.join(cells)}")
+                val.append("   ")
+                val.append_text(_styled_power(self.power.cpu_w))
+            table.add_row("CPU", val)
 
         # Memory row
-        used_g = bytes_to_gib(mem.used)
-        total_g = bytes_to_gib(mem.total)
-        mem_cells = [f"{used_g:.1f} / {total_g:.1f} GB"]
-        mem_cells.append(pressure_indicator(term, mem.pressure_level))
-        lines.append(f"  {term.bold('Memory'):>{L}}   {'   '.join(mem_cells)}")
+        mem_val = Text()
+        mem_val.append(f"{bytes_to_gib(mem.used):.1f} / {bytes_to_gib(mem.total):.1f} GB")
+        mem_val.append("   ")
+        mem_val.append_text(_styled_pressure(mem.pressure_level))
+        table.add_row("Memory", mem_val)
 
         # Memory detail sub-row
         if opts.show_memory_detail:
-            parts = [
-                f"{format_gib(mem.wired)}G {term.dim('wired')}",
-                f"{format_gib(mem.active)}G {term.dim('active')}",
-                f"{format_gib(mem.inactive)}G {term.dim('inactive')}",
-                f"{format_gib(mem.compressed)}G {term.dim('compressed')}",
-            ]
-            lines.append(f"  {'':>{L}}   {' / '.join(parts)}")
+            detail = Text()
+            detail.append(f"{format_gib(mem.wired)}G ")
+            detail.append("wired", style="dim")
+            detail.append(f" / {format_gib(mem.active)}G ")
+            detail.append("active", style="dim")
+            detail.append(f" / {format_gib(mem.inactive)}G ")
+            detail.append("inactive", style="dim")
+            detail.append(f" / {format_gib(mem.compressed)}G ")
+            detail.append("compressed", style="dim")
+            table.add_row("", detail)
 
-        # Metal GPU memory row
+        # Metal row
         if opts.show_gpu_mem and mem.metal_recommended_max > 0:
-            lines.append(
-                f"  {term.bold('Metal'):>{L}}   "
-                f"{format_gib(mem.metal_allocated)}G / "
-                f"{format_gib(mem.metal_recommended_max)}G"
+            table.add_row(
+                "Metal",
+                f"{format_gib(mem.metal_allocated)}G / {format_gib(mem.metal_recommended_max)}G",
             )
 
         # Swap row
         if opts.show_swap:
-            lines.append(
-                f"  {term.bold('Swap'):>{L}}   "
-                f"{format_gib(mem.swap_used)}G / "
-                f"{format_gib(mem.swap_total)}G"
+            table.add_row(
+                "Swap",
+                f"{format_gib(mem.swap_used)}G / {format_gib(mem.swap_total)}G",
             )
 
-        # Power summary row
+        # Power row
         if opts.show_power and self.power and self.power.available:
             pw = self.power
-            power_cells: list[str] = []
-            if pw.package_w is not None:
-                power_cells.append(f"{term.dim('Pkg')} {colored_power(term, pw.package_w)}")
-            if pw.cpu_w is not None:
-                power_cells.append(f"{term.dim('CPU')} {colored_power(term, pw.cpu_w)}")
-            if pw.gpu_w is not None:
-                power_cells.append(f"{term.dim('GPU')} {colored_power(term, pw.gpu_w)}")
-            if pw.dram_w is not None:
-                power_cells.append(f"{term.dim('DRAM')} {colored_power(term, pw.dram_w)}")
-            if opts.show_ane and pw.ane_w is not None:
-                power_cells.append(f"{term.dim('ANE')} {colored_power(term, pw.ane_w)}")
-            if power_cells:
-                lines.append(f"  {term.bold('Power'):>{L}}   {'   '.join(power_cells)}")
+            val = Text()
+            items: list[tuple[str, float | None]] = [
+                ("Pkg", pw.package_w),
+                ("CPU", pw.cpu_w),
+                ("GPU", pw.gpu_w),
+                ("DRAM", pw.dram_w),
+            ]
+            if opts.show_ane:
+                items.append(("ANE", pw.ane_w))
+            first = True
+            for label, watts in items:
+                if watts is not None:
+                    if not first:
+                        val.append("   ")
+                    val.append(f"{label} ", style="dim")
+                    val.append_text(_styled_power(watts))
+                    first = False
+            if not first:
+                table.add_row("Power", val)
         elif opts.show_ane and self.power and self.power.ane_w is not None:
-            lines.append(
-                f"  {term.bold('ANE'):>{L}}   {colored_power(term, self.power.ane_w)}"
-            )
+            val = Text()
+            val.append_text(_styled_power(self.power.ane_w))
+            table.add_row("ANE", val)
 
-        print("\n".join(lines), file=fp)
+        console.print(table)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-serializable dictionary."""

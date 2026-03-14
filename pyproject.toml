@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "psutil>=5.9.0",
-    "blessed>=1.17.1",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]
