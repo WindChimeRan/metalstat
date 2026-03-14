@@ -6,3 +6,5 @@ dist/
 build/
 .eggs/
 
+debug_ioreport.py
+gpu_dvfs_table.py
