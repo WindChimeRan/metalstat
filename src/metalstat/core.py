@@ -19,7 +19,7 @@ from metalstat.cpu import CPUMetrics, get_cpu_metrics
 from metalstat.gpu import GPUMetrics, parse_gpu_metrics
 from metalstat.memory import MemoryMetrics, get_memory_metrics
 from metalstat.power import PowerMetrics, parse_power_metrics
-from metalstat.procs import ProcessInfo, get_top_processes
+from metalstat.procs import ProcessInfo, get_top_processes, _format_gpu_time
 from metalstat.sysinfo import ChipInfo, get_chip_info, get_gpu_dvfs_freqs, is_apple_silicon
 from metalstat.util import bytes_to_gib, format_gib, pct_style, pressure_style
 
@@ -353,7 +353,7 @@ class AppleSiliconStat:
             proc_tbl.add_column("PID", style="dim", justify="right")
             proc_tbl.add_column("RSS", justify="right")
             proc_tbl.add_column("CPU%", justify="right")
-            proc_tbl.add_column("User", style="dim")
+            proc_tbl.add_column("GPU Time", justify="right", style="cyan")
 
             for i, p in enumerate(self.top_procs, 1):
                 rss_gib = bytes_to_gib(p.rss_bytes)
@@ -362,8 +362,9 @@ class AppleSiliconStat:
                 else:
                     rss_str = f"{p.rss_bytes / (1024**2):.0f}M"
                 cpu_str = f"{p.cpu_percent:.0f}%"
+                gpu_str = _format_gpu_time(p.gpu_time_ns)
                 proc_tbl.add_row(
-                    str(i), p.name, str(p.pid), rss_str, cpu_str, p.username,
+                    str(i), p.name, str(p.pid), rss_str, cpu_str, gpu_str,
                 )
 
             console.print(proc_tbl)
@@ -469,7 +470,7 @@ class AppleSiliconStat:
                     "name": p.name,
                     "rss_gb": round(bytes_to_gib(p.rss_bytes), 2),
                     "cpu_percent": round(p.cpu_percent, 1),
-                    "username": p.username,
+                    "gpu_time_ns": p.gpu_time_ns,
                 }
                 for p in self.top_procs
             ]
