@@ -19,6 +19,7 @@ from metalstat.cpu import CPUMetrics, get_cpu_metrics
 from metalstat.gpu import GPUMetrics, parse_gpu_metrics
 from metalstat.memory import MemoryMetrics, get_memory_metrics
 from metalstat.power import PowerMetrics, parse_power_metrics
+from metalstat.procs import ProcessInfo, get_top_processes
 from metalstat.sysinfo import ChipInfo, get_chip_info, get_gpu_dvfs_freqs, is_apple_silicon
 from metalstat.util import bytes_to_gib, format_gib, pct_style, pressure_style
 
@@ -32,6 +33,8 @@ class DisplayOptions:
     show_swap: bool = False
     show_temp: bool = False
     show_ane: bool = False
+    show_procs: bool = False
+    num_procs: int = 8
     color: bool = True
     header: bool = True
     json_output: bool = False
@@ -77,6 +80,7 @@ class AppleSiliconStat:
     cpu: CPUMetrics | None = None
     gpu: GPUMetrics | None = None
     power: PowerMetrics | None = None
+    top_procs: list[ProcessInfo] | None = None
 
     @staticmethod
     def new_query(
@@ -84,6 +88,7 @@ class AppleSiliconStat:
         query_cpu: bool = True,
         query_gpu: bool = True,
         query_power: bool = True,
+        query_procs: int = 0,
     ) -> AppleSiliconStat:
         """Query all metrics and return a new snapshot."""
         chip = get_chip_info()
@@ -122,6 +127,10 @@ class AppleSiliconStat:
                 if query_power:
                     power_metrics = PowerMetrics(available=False)
 
+        procs = None
+        if query_procs > 0:
+            procs = get_top_processes(n=query_procs)
+
         return AppleSiliconStat(
             hostname=socket.gethostname(),
             query_time=datetime.now(),
@@ -130,12 +139,13 @@ class AppleSiliconStat:
             cpu=cpu_metrics,
             gpu=gpu_metrics,
             power=power_metrics,
+            top_procs=procs,
         )
 
     def _is_detailed(self, opts: DisplayOptions) -> bool:
         return any([
             opts.show_cpu, opts.show_power, opts.show_memory_detail,
-            opts.show_gpu_mem, opts.show_swap, opts.show_ane,
+            opts.show_gpu_mem, opts.show_swap, opts.show_ane, opts.show_procs,
         ])
 
     def print_formatted(
@@ -331,6 +341,33 @@ class AppleSiliconStat:
             ane_tbl.add_row("ANE", val)
             console.print(ane_tbl)
 
+        # --- Processes section ---
+        if opts.show_procs and self.top_procs:
+            console.print(Rule(style=rule_style))
+            proc_tbl = Table(
+                show_header=True, show_edge=False, show_lines=False,
+                box=None, padding=(0, 1), pad_edge=False,
+            )
+            proc_tbl.add_column("#", style="dim", justify="right", width=3)
+            proc_tbl.add_column("Process", style="bold", min_width=16, no_wrap=True)
+            proc_tbl.add_column("PID", style="dim", justify="right")
+            proc_tbl.add_column("RSS", justify="right")
+            proc_tbl.add_column("CPU%", justify="right")
+            proc_tbl.add_column("User", style="dim")
+
+            for i, p in enumerate(self.top_procs, 1):
+                rss_gib = bytes_to_gib(p.rss_bytes)
+                if rss_gib >= 1.0:
+                    rss_str = f"{rss_gib:.1f}G"
+                else:
+                    rss_str = f"{p.rss_bytes / (1024**2):.0f}M"
+                cpu_str = f"{p.cpu_percent:.0f}%"
+                proc_tbl.add_row(
+                    str(i), p.name, str(p.pid), rss_str, cpu_str, p.username,
+                )
+
+            console.print(proc_tbl)
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-serializable dictionary."""
         d: dict[str, Any] = {
@@ -424,6 +461,18 @@ class AppleSiliconStat:
                     else None
                 ),
             }
+
+        if self.top_procs:
+            d["top_processes"] = [
+                {
+                    "pid": p.pid,
+                    "name": p.name,
+                    "rss_gb": round(bytes_to_gib(p.rss_bytes), 2),
+                    "cpu_percent": round(p.cpu_percent, 1),
+                    "username": p.username,
+                }
+                for p in self.top_procs
+            ]
 
         return d
 

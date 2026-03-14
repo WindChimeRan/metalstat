@@ -52,6 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show ANE (Neural Engine) power",
     )
     display.add_argument(
+        "-p", "--show-procs",
+        action="store_true",
+        help="Show top memory-consuming processes",
+    )
+    display.add_argument(
+        "-n", "--num-procs",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Number of top processes to show (default: 8)",
+    )
+    display.add_argument(
         "-a", "--show-all",
         action="store_true",
         help="Enable all display options",
@@ -136,6 +148,8 @@ def _make_display_options(args: argparse.Namespace) -> DisplayOptions:
         show_gpu_mem=show_all or args.show_gpu_mem,
         show_swap=show_all or args.show_swap,
         show_ane=show_all or args.show_ane,
+        show_procs=show_all or args.show_procs,
+        num_procs=args.num_procs,
         color=_determine_color(args),
         header=not args.no_header,
         json_output=args.json_output,
@@ -153,6 +167,7 @@ def _query_and_print(args: argparse.Namespace, opts: DisplayOptions) -> None:
         query_cpu=needs_cpu,
         query_gpu=needs_gpu,
         query_power=needs_power,
+        query_procs=opts.num_procs if opts.show_procs else 0,
     )
 
     if opts.json_output:
@@ -198,6 +213,7 @@ def _watch_loop(args: argparse.Namespace, opts: DisplayOptions) -> None:
                     query_cpu=needs_cpu,
                     query_gpu=needs_gpu,
                     query_power=needs_power,
+                    query_procs=opts.num_procs if opts.show_procs else 0,
                 )
 
                 # Render to a string buffer, then display via Live
