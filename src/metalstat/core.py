@@ -119,6 +119,12 @@ class AppleSiliconStat:
             power=power_metrics,
         )
 
+    def _is_detailed(self, opts: DisplayOptions) -> bool:
+        return any([
+            opts.show_cpu, opts.show_power, opts.show_memory_detail,
+            opts.show_gpu_mem, opts.show_swap, opts.show_ane,
+        ])
+
     def print_formatted(
         self,
         opts: DisplayOptions,
@@ -127,112 +133,161 @@ class AppleSiliconStat:
         """Print formatted, colored output."""
         term = blessed.Terminal()
         if not opts.color:
-            # Disable colors by using a null terminal
             term = blessed.Terminal(force_styling=False)
 
+        if self._is_detailed(opts):
+            self._print_detailed(term, opts, fp)
+        else:
+            self._print_oneliner(term, opts, fp)
+
+    def _print_oneliner(
+        self,
+        term: blessed.Terminal,
+        opts: DisplayOptions,
+        fp: IO[str],
+    ) -> None:
+        """Compact one-liner output (default, no detail flags)."""
         lines: list[str] = []
 
-        # Header line
         if opts.header:
             ts = self.query_time.strftime("%Y-%m-%d %H:%M:%S")
-            header = f"{term.bold(self.hostname)}  {ts}"
-            lines.append(header)
+            lines.append(f"{term.bold(self.hostname)}  {ts}")
 
-        # Main status line
-        parts: list[str] = []
+        parts: list[str] = [term.bold_cyan(self.chip.name)]
 
-        # Chip name with core info
-        chip_str = term.bold_cyan(self.chip.name)
-        if opts.show_cpu or opts.show_memory_detail:
-            core_info = f"{self.chip.cpu_cores_total}C CPU"
-            if self.chip.cpu_cores_performance > 0 and self.chip.cpu_cores_efficiency > 0:
-                core_info = (
-                    f"{self.chip.cpu_cores_total}C CPU: "
-                    f"{self.chip.cpu_cores_performance}P+"
-                    f"{self.chip.cpu_cores_efficiency}E"
-                )
-            if self.chip.gpu_cores:
-                core_info += f", {self.chip.gpu_cores}C GPU"
-            chip_str = term.bold_cyan(f"{self.chip.name}") + f" ({core_info})"
-        parts.append(chip_str)
-
-        # GPU utilization
         if self.gpu and self.gpu.available:
             gpu_str = "GPU " + colored_percent(
                 term, self.gpu.utilization or 0, low=30, high=80,
             )
             if self.gpu.frequency_mhz:
                 gpu_str += f", {self.gpu.frequency_mhz} MHz"
-            if opts.show_power and self.power and self.power.gpu_w is not None:
-                gpu_str += ", " + colored_power(term, self.power.gpu_w)
             parts.append(gpu_str)
         elif self.gpu is not None:
             parts.append("GPU " + term.dim("??"))
 
-        # CPU utilization
-        if opts.show_cpu and self.cpu:
-            cpu_str = "CPU " + colored_percent(
-                term, self.cpu.utilization_total, low=50, high=85,
+        mem = self.memory
+        parts.append(f"{bytes_to_gib(mem.used):.1f} / {bytes_to_gib(mem.total):.1f} GB")
+        parts.append("Pressure: " + pressure_indicator(term, mem.pressure_level))
+
+        lines.append(" | ".join(parts))
+        print("\n".join(lines), file=fp)
+
+    def _print_detailed(
+        self,
+        term: blessed.Terminal,
+        opts: DisplayOptions,
+        fp: IO[str],
+    ) -> None:
+        """Table-like multi-line output when detail flags are on."""
+        L = 10  # label column width
+        lines: list[str] = []
+        mem = self.memory
+
+        # Header
+        if opts.header:
+            ts = self.query_time.strftime("%Y-%m-%d %H:%M:%S")
+            lines.append(f"{term.bold(self.hostname)}  {ts}")
+
+        # Chip title line
+        chip_str = term.bold_cyan(self.chip.name)
+        core_parts: list[str] = []
+        if self.chip.cpu_cores_performance > 0 and self.chip.cpu_cores_efficiency > 0:
+            core_parts.append(
+                f"{self.chip.cpu_cores_total}C CPU "
+                f"({self.chip.cpu_cores_performance}P + "
+                f"{self.chip.cpu_cores_efficiency}E)"
             )
+        else:
+            core_parts.append(f"{self.chip.cpu_cores_total}C CPU")
+        if self.chip.gpu_cores:
+            core_parts.append(f"{self.chip.gpu_cores}C GPU")
+        if self.chip.metal_family:
+            core_parts.append(self.chip.metal_family)
+        lines.append(f"{chip_str}  {term.dim(' / '.join(core_parts))}")
+
+        # GPU row
+        if self.gpu and self.gpu.available:
+            val = colored_percent(term, self.gpu.utilization or 0, low=30, high=80)
+            cells = [val]
+            if self.gpu.frequency_mhz:
+                cells.append(f"{self.gpu.frequency_mhz:>5d} MHz")
+            if opts.show_power and self.power and self.power.gpu_w is not None:
+                cells.append(colored_power(term, self.power.gpu_w))
+            lines.append(f"  {term.bold('GPU'):>{L}}   {'   '.join(cells)}")
+        elif self.gpu is not None:
+            lines.append(f"  {term.bold('GPU'):>{L}}   {term.dim('unavailable')}")
+
+        # CPU row
+        if opts.show_cpu and self.cpu:
+            val = colored_percent(term, self.cpu.utilization_total, low=50, high=85)
+            cells = [val]
             if (
                 self.cpu.utilization_p_cluster is not None
                 and self.cpu.utilization_e_cluster is not None
             ):
-                cpu_str += (
-                    f" (P: {self.cpu.utilization_p_cluster:.0f}%,"
-                    f" E: {self.cpu.utilization_e_cluster:.0f}%)"
+                cells.append(
+                    f"P: {self.cpu.utilization_p_cluster:4.0f}%   "
+                    f"E: {self.cpu.utilization_e_cluster:4.0f}%"
                 )
             if opts.show_power and self.power and self.power.cpu_w is not None:
-                cpu_str += ", " + colored_power(term, self.power.cpu_w)
-            parts.append(cpu_str)
+                cells.append(colored_power(term, self.power.cpu_w))
+            lines.append(f"  {term.bold('CPU'):>{L}}   {'   '.join(cells)}")
 
-        # Memory summary
-        mem = self.memory
-        used_gib = bytes_to_gib(mem.used)
-        total_gib = bytes_to_gib(mem.total)
-        mem_str = f"{used_gib:.1f} / {total_gib:.1f} GB"
-        parts.append(mem_str)
+        # Memory row
+        used_g = bytes_to_gib(mem.used)
+        total_g = bytes_to_gib(mem.total)
+        mem_cells = [f"{used_g:.1f} / {total_g:.1f} GB"]
+        mem_cells.append(pressure_indicator(term, mem.pressure_level))
+        lines.append(f"  {term.bold('Memory'):>{L}}   {'   '.join(mem_cells)}")
 
-        # Pressure
-        parts.append("Pressure: " + pressure_indicator(term, mem.pressure_level))
-
-        lines.append(" | ".join(parts))
-
-        # Second line: detailed breakdown (if requested)
-        detail_parts: list[str] = []
-
+        # Memory detail sub-row
         if opts.show_memory_detail:
-            detail_parts.append(
-                f"Memory: {format_gib(mem.wired)}G wired, "
-                f"{format_gib(mem.active)}G active, "
-                f"{format_gib(mem.inactive)}G inactive, "
-                f"{format_gib(mem.compressed)}G compressed"
+            parts = [
+                f"{format_gib(mem.wired)}G {term.dim('wired')}",
+                f"{format_gib(mem.active)}G {term.dim('active')}",
+                f"{format_gib(mem.inactive)}G {term.dim('inactive')}",
+                f"{format_gib(mem.compressed)}G {term.dim('compressed')}",
+            ]
+            lines.append(f"  {'':>{L}}   {' / '.join(parts)}")
+
+        # Metal GPU memory row
+        if opts.show_gpu_mem and mem.metal_recommended_max > 0:
+            lines.append(
+                f"  {term.bold('Metal'):>{L}}   "
+                f"{format_gib(mem.metal_allocated)}G / "
+                f"{format_gib(mem.metal_recommended_max)}G"
             )
 
-        if opts.show_gpu_mem:
-            if mem.metal_recommended_max > 0:
-                detail_parts.append(
-                    f"Metal: {format_gib(mem.metal_allocated)}G / "
-                    f"{format_gib(mem.metal_recommended_max)}G"
-                )
-
+        # Swap row
         if opts.show_swap:
-            detail_parts.append(
-                f"Swap: {format_gib(mem.swap_used)}G / "
+            lines.append(
+                f"  {term.bold('Swap'):>{L}}   "
+                f"{format_gib(mem.swap_used)}G / "
                 f"{format_gib(mem.swap_total)}G"
             )
 
-        if opts.show_ane and self.power and self.power.ane_w is not None:
-            detail_parts.append(f"ANE: {colored_power(term, self.power.ane_w)}")
+        # Power summary row
+        if opts.show_power and self.power and self.power.available:
+            pw = self.power
+            power_cells: list[str] = []
+            if pw.package_w is not None:
+                power_cells.append(f"{term.dim('Pkg')} {colored_power(term, pw.package_w)}")
+            if pw.cpu_w is not None:
+                power_cells.append(f"{term.dim('CPU')} {colored_power(term, pw.cpu_w)}")
+            if pw.gpu_w is not None:
+                power_cells.append(f"{term.dim('GPU')} {colored_power(term, pw.gpu_w)}")
+            if pw.dram_w is not None:
+                power_cells.append(f"{term.dim('DRAM')} {colored_power(term, pw.dram_w)}")
+            if opts.show_ane and pw.ane_w is not None:
+                power_cells.append(f"{term.dim('ANE')} {colored_power(term, pw.ane_w)}")
+            if power_cells:
+                lines.append(f"  {term.bold('Power'):>{L}}   {'   '.join(power_cells)}")
+        elif opts.show_ane and self.power and self.power.ane_w is not None:
+            lines.append(
+                f"  {term.bold('ANE'):>{L}}   {colored_power(term, self.power.ane_w)}"
+            )
 
-        if opts.show_power and self.power and self.power.package_w is not None:
-            detail_parts.append(f"Pkg: {colored_power(term, self.power.package_w)}")
-
-        if detail_parts:
-            lines.append("  " + " | ".join(detail_parts))
-
-        output = "\n".join(lines)
-        print(output, file=fp)
+        print("\n".join(lines), file=fp)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-serializable dictionary."""

@@ -232,8 +232,9 @@ class TestCLI:
         r = run_metalstat("-a", "--no-color")
         assert r.returncode == 0
         assert "CPU" in r.stdout
-        assert "Memory:" in r.stdout
-        assert "Pkg:" in r.stdout
+        assert "Memory" in r.stdout
+        assert "Power" in r.stdout
+        assert "Pkg" in r.stdout
 
     def test_show_cpu(self):
         r = run_metalstat("-c", "--no-color")
