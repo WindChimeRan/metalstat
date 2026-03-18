@@ -2,7 +2,7 @@
 
 Apple Silicon GPU/CPU/Memory monitoring CLI — like [gpustat](https://github.com/wookayin/gpustat), but for Metal.
 
-![screenshot](assets/screenshot.png)
+![screenshot](https://raw.githubusercontent.com/WindChimeRan/metalstat/main/assets/screenshot.png)
 
 No sudo required. Uses IOReport private API for GPU/power metrics.
 
@@ -25,26 +25,10 @@ metalstat -a -p
 
 # Watch mode: refresh every 1s
 metalstat -a -i 1
+
+# See all options
+metalstat --help
 ```
-
-## Options
-
-| Flag | Description |
-|------|-------------|
-| `-c, --show-cpu` | CPU utilization with P/E cluster breakdown |
-| `-P, --show-power` | Power consumption (GPU/CPU/DRAM/Package) |
-| `-m, --show-memory` | Detailed memory breakdown |
-| `-g, --show-gpu-mem` | Metal GPU memory allocation |
-| `-s, --show-swap` | Swap usage |
-| `--show-ane` | ANE (Neural Engine) power |
-| `-p, --show-procs` | Top processes by memory usage |
-| `-a, --show-all` | Enable all display options |
-| `--json` | JSON output |
-| `--no-color` | Suppress colors |
-| `--no-header` | Suppress hostname/timestamp |
-| `-i [N], --interval [N]` | Watch mode, refresh every N seconds (default: 1) |
-| `--sample-duration N` | IOReport sample window in seconds (default: 0.2) |
-| `--debug` | Show stack traces on error |
 
 ## Understanding Apple Silicon memory (vs. CUDA)
 
