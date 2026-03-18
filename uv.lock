@@ -59,31 +59,23 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "psutil" },
+    { name = "pyobjc-framework-metal" },
     { name = "rich" },
 ]
 
 [package.optional-dependencies]
-all = [
-    { name = "pyobjc-framework-metal" },
-]
 dev = [
-    { name = "pyobjc-framework-metal" },
     { name = "pytest" },
-]
-metal = [
-    { name = "pyobjc-framework-metal" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "psutil", specifier = ">=5.9.0" },
-    { name = "pyobjc-framework-metal", marker = "extra == 'all'", specifier = ">=10.0" },
-    { name = "pyobjc-framework-metal", marker = "extra == 'dev'", specifier = ">=10.0" },
-    { name = "pyobjc-framework-metal", marker = "extra == 'metal'", specifier = ">=10.0" },
+    { name = "pyobjc-framework-metal", specifier = ">=10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "rich", specifier = ">=13.0" },
 ]
-provides-extras = ["metal", "all", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "packaging"

@@ -2,11 +2,7 @@
 
 Apple Silicon GPU/CPU/Memory monitoring CLI — like [gpustat](https://github.com/wookayin/gpustat), but for Metal.
 
-```
-$ metalstat
-ran-mbp.local  2026-03-13 19:22:02
-Apple M1 Pro | GPU   8.5%, 388 MHz | 15.5 / 32.0 GB | Pressure: ●green
-```
+![screenshot](assets/screenshot.png)
 
 No sudo required. Uses IOReport private API for GPU/power metrics.
 
@@ -14,9 +10,6 @@ No sudo required. Uses IOReport private API for GPU/power metrics.
 
 ```bash
 pip install metalstat
-
-# With Metal GPU memory tracking (optional, requires pyobjc):
-pip install metalstat[metal]
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
@@ -27,77 +20,11 @@ uv tool install metalstat
 ## Usage
 
 ```bash
-# Quick glance (GPU utilization, frequency, memory, pressure)
-metalstat
+# One-shot: all metrics + top processes
+metalstat -a -p
 
-# Show everything
-metalstat -a
-
-# CPU utilization with P/E cluster breakdown
-metalstat -c
-
-# Power consumption (GPU/CPU/Package)
-metalstat -P
-
-# Detailed memory breakdown
-metalstat -m
-
-# Metal GPU memory allocation
-metalstat -g
-
-# JSON output for scripting
-metalstat --json
-
-# Watch mode (refresh every 1s)
-metalstat -i
-metalstat -i 2         # every 2 seconds
-metalstat -a -i 1      # all metrics, 1s refresh
-
-# Combine flags
-metalstat -cP          # CPU + Power
-metalstat -mg          # memory detail + Metal GPU mem
-```
-
-## Output examples
-
-**Default:**
-```
-Apple M1 Pro | GPU   8.5%, 388 MHz | 15.5 / 32.0 GB | Pressure: ●green
-```
-
-**`metalstat -a` (all metrics):**
-```
-ran-mbp.local  2026-03-13 21:04:38
-Apple M1 Pro  8C CPU (6P + 2E) / 14C GPU / Apple Family 7
-     GPU   10.9%     388 MHz   0.1W
-     CPU   45.4%   P:   13%   E:    0%   3.6W
-  Memory  15.6 / 32.0 GB   ●green
-          2.7G wired / 12.9G active / 12.9G inactive / 2.5G compressed
-   Metal  0.0G / 25.0G
-    Swap  3.9G / 5.0G
-   Power  Pkg 4.8W   CPU 3.6W   GPU 0.1W   DRAM 2.2W
-```
-
-**`metalstat --json`:**
-```json
-{
-  "hostname": "ran-mbp.local",
-  "chip": {
-    "name": "Apple M1 Pro",
-    "cpu_cores": { "total": 8, "performance": 6, "efficiency": 2 },
-    "gpu_cores": 14,
-    "metal_family": "Apple Family 7"
-  },
-  "memory": {
-    "total_gb": 32.0, "used_gb": 15.35, "available_gb": 13.23,
-    "wired_gb": 2.85, "active_gb": 12.5, "inactive_gb": 12.12,
-    "compressed_gb": 2.62,
-    "pressure_percent": 18.0, "pressure_level": "green"
-  },
-  "gpu": { "utilization": 10.4, "frequency_mhz": 388 },
-  "gpu_memory": { "allocated_gb": 0.0, "recommended_max_gb": 24.96 },
-  "power": { "cpu_w": 1.75, "gpu_w": 0.04, "package_w": 2.72 }
-}
+# Watch mode: refresh every 1s
+metalstat -a -i 1
 ```
 
 ## Options
@@ -110,6 +37,7 @@ Apple M1 Pro  8C CPU (6P + 2E) / 14C GPU / Apple Family 7
 | `-g, --show-gpu-mem` | Metal GPU memory allocation |
 | `-s, --show-swap` | Swap usage |
 | `--show-ane` | ANE (Neural Engine) power |
+| `-p, --show-procs` | Top processes by memory usage |
 | `-a, --show-all` | Enable all display options |
 | `--json` | JSON output |
 | `--no-color` | Suppress colors |
@@ -162,20 +90,6 @@ overhead, but you're sharing that memory budget with the rest of the system.
 - **Green** (>50% free): Healthy, plenty of headroom
 - **Yellow** (25-50% free): Moderate pressure, compression active
 - **Red** (<25% free): Heavy pressure, swapping likely
-
-## How it works
-
-| Metric | Data Source | Sudo? |
-|--------|-----------|-------|
-| GPU utilization & frequency | IOReport `libIOReport.dylib` (private API) | No |
-| GPU frequency mapping | IORegistry DVFS table (`sgx` device node) | No |
-| CPU/GPU/DRAM/Package power | IOReport "Energy Model" channels | No |
-| CPU utilization | psutil (`host_processor_info`) | No |
-| System memory | psutil (`vm_statistics64`) | No |
-| Memory pressure | `memory_pressure` command | No |
-| Metal GPU memory | Metal API via PyObjC | No |
-| Chip name & core counts | Metal API + sysctl | No |
-| Compressed memory | `vm_stat` command | No |
 
 ## Requirements
 

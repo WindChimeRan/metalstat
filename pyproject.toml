@@ -23,12 +23,11 @@ classifiers = [
 dependencies = [
     "psutil>=5.9.0",
     "rich>=13.0",
+    "pyobjc-framework-Metal>=10.0",
 ]
 
 [project.optional-dependencies]
-metal = ["pyobjc-framework-Metal>=10.0"]
-all = ["pyobjc-framework-Metal>=10.0"]
-dev = ["pytest>=7.0", "pyobjc-framework-Metal>=10.0"]
+dev = ["pytest>=7.0"]
 
 [project.scripts]
 metalstat = "metalstat.cli:main"
