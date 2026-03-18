@@ -1,12 +1,12 @@
 [project]
 name = "metalstat"
-version = "0.1.1"
+version = "0.1.2"
 description = "Apple Silicon GPU/CPU/Memory monitoring CLI — like gpustat, but for Metal"
 readme = "README.md"
 authors = [
     { name = "ran", email = "hzz5361@psu.edu" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 keywords = ["apple-silicon", "gpu", "metal", "monitoring", "cli"]
 classifiers = [
