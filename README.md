@@ -1,5 +1,7 @@
 # metalstat
 
+[![PyPI](https://img.shields.io/pypi/v/metalstat)](https://pypi.org/project/metalstat/)
+
 Apple Silicon GPU/CPU/Memory monitoring CLI — like [gpustat](https://github.com/wookayin/gpustat), but for Metal.
 
 ![screenshot](https://raw.githubusercontent.com/WindChimeRan/metalstat/main/assets/screenshot.png)

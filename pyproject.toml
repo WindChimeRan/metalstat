@@ -1,6 +1,6 @@
 [project]
 name = "metalstat"
-version = "0.1.0"
+version = "0.1.1"
 description = "Apple Silicon GPU/CPU/Memory monitoring CLI — like gpustat, but for Metal"
 readme = "README.md"
 authors = [
@@ -28,6 +28,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/WindChimeRan/metalstat"
+Source = "https://github.com/WindChimeRan/metalstat"
+Issues = "https://github.com/WindChimeRan/metalstat/issues"
 
 [project.scripts]
 metalstat = "metalstat.cli:main"
