@@ -44,7 +44,7 @@ RTX 4090) and data must be copied between CPU and GPU over PCIe.
 ```
   Memory  15.6 / 32.0 GB   ●green                    ← system memory (shared by CPU + GPU)
           2.7G wired / 12.9G active / ...             ← breakdown by page state
-   Metal  0.0G / 25.0G                                ← GPU allocation / recommended max
+   Metal  3.4G / 25.0G                                ← GPU memory in use / recommended max
 ```
 
 **System memory** (`15.6 / 32.0 GB`) is the total unified memory usage — CPU and
@@ -54,10 +54,13 @@ GPU workloads combined. The breakdown shows:
 - **Inactive**: Not recently accessed, still in RAM, reclaimable
 - **Compressed**: macOS compresses inactive pages in-memory before swapping to disk
 
-**Metal GPU allocation** (`0.0G / 25.0G`) shows how much memory is currently
-allocated for GPU resources (textures, buffers, ML model weights) vs. the
-**recommended maximum**. This is the closest equivalent to "VRAM used / VRAM total"
-on NVIDIA, but with important differences:
+**Metal GPU memory** (`3.4G / 25.0G`) shows how much system memory is
+currently in use by GPU resources (textures, buffers, ML model weights) across
+all processes vs. the **recommended maximum**. The in-use value is read
+system-wide from the `IOAccelerator` IORegistry node — `MTLDevice`'s own
+`currentAllocatedSize` is per-process and would only see this tool's own
+(empty) device. This is the closest equivalent to "VRAM used / VRAM total" on
+NVIDIA, but with important differences:
 
 | | NVIDIA (CUDA) | Apple Silicon (Metal) |
 |---|---|---|

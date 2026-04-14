@@ -124,15 +124,39 @@ def get_chip_info() -> ChipInfo:
     )
 
 
-def get_metal_memory() -> tuple[int, int]:
-    """Get Metal GPU memory: (current_allocated_bytes, recommended_max_bytes)."""
-    device = MTLCreateSystemDefaultDevice()
-    if device:
-        return (
-            device.currentAllocatedSize(),
-            device.recommendedMaxWorkingSetSize(),
+def _get_gpu_memory_in_use() -> int:
+    """Read system-wide in-use GPU memory (bytes) from IOAccelerator.
+
+    MTLDevice.currentAllocatedSize is per-process and only sees resources
+    created by the calling process's own MTLDevice — so a monitoring tool
+    always reads ~0 even when other processes are pinning gigabytes of GPU
+    memory. The IOAccelerator IORegistry node exposes the system-wide value
+    under PerformanceStatistics["In use system memory"].
+    """
+    try:
+        r = subprocess.run(
+            ["ioreg", "-rc", "IOAccelerator", "-d", "1"],
+            capture_output=True, text=True, timeout=5,
         )
-    return (0, 0)
+        m = re.search(r'"In use system memory"\s*=\s*(\d+)', r.stdout)
+        if m:
+            return int(m.group(1))
+    except (subprocess.SubprocessError, ValueError):
+        pass
+    return 0
+
+
+def get_metal_memory() -> tuple[int, int]:
+    """Get Metal GPU memory: (in_use_bytes, recommended_max_bytes).
+
+    in_use_bytes is system-wide GPU memory usage from IOAccelerator.
+    recommended_max_bytes is the Metal default device's recommended working
+    set size (a static device property).
+    """
+    in_use = _get_gpu_memory_in_use()
+    device = MTLCreateSystemDefaultDevice()
+    rec_max = device.recommendedMaxWorkingSetSize() if device else 0
+    return (in_use, rec_max)
 
 
 def is_apple_silicon() -> bool:
