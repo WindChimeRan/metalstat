@@ -209,9 +209,12 @@ class TestCLI:
         assert "metalstat" in r.stdout
 
     def test_version(self):
+        import re
+        from metalstat import __version__
         r = run_metalstat("--version")
         assert r.returncode == 0
-        assert "0.1.0" in r.stdout
+        assert __version__ in r.stdout
+        assert re.search(r"\d+\.\d+\.\d+", r.stdout)
 
     def test_default_output(self):
         r = run_metalstat("--no-color")
