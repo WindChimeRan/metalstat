@@ -104,7 +104,10 @@ def get_memory_metrics() -> MemoryMetrics:
 
     return MemoryMetrics(
         total=mem.total,
-        used=mem.used,
+        # psutil's used excludes compressed memory (Zabbix convention).
+        # Add it back for Activity Monitor parity — on Apple Silicon the
+        # compressor pool is often multiple GB of real RAM.
+        used=mem.used + compressed,
         available=mem.available,
         free=mem.free,
         active=mem.active if hasattr(mem, "active") else 0,
