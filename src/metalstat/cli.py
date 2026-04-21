@@ -142,6 +142,48 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"metalstat {__version__}",
     )
 
+    subparsers = parser.add_subparsers(dest="subcommand")
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Wrap a child command and log metrics for its lifetime",
+        description=(
+            "Run a child command with a metalstat sampler attached. Writes "
+            "PREFIX.meta.json (static info) and PREFIX.jsonl (per-tick samples) "
+            "while the child runs. With --capture, also writes PREFIX.log "
+            "containing the child's stdout+stderr."
+        ),
+    )
+    run_parser.add_argument(
+        "-o", "--output",
+        required=True,
+        metavar="PREFIX",
+        help="Output file prefix. Produces PREFIX.jsonl, PREFIX.meta.json, and (with --capture) PREFIX.log.",
+    )
+    run_parser.add_argument(
+        "-i", "--interval",
+        type=float,
+        default=1.0,
+        metavar="SECONDS",
+        help="Sampling interval in seconds (default: 1.0)",
+    )
+    run_parser.add_argument(
+        "--sample-duration",
+        type=float,
+        default=0.2,
+        metavar="SECONDS",
+        help="IOReport sample window per tick (default: 0.2)",
+    )
+    run_parser.add_argument(
+        "--capture",
+        action="store_true",
+        help="Tee the child's stdout+stderr to PREFIX.log (terminal view preserved)",
+    )
+    run_parser.add_argument(
+        "child_argv",
+        nargs=argparse.REMAINDER,
+        help="Command to run after `--`: e.g. `-- llama-cli -m model.gguf`",
+    )
+
     return parser
 
 
@@ -286,15 +328,6 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.json:
-        parser.error(
-            "--json was removed in 0.1.4. Use --jsonl for per-sample streaming "
-            "or --meta-json for one-shot static system info."
-        )
-
-    if args.jsonl and args.meta_json:
-        parser.error("--jsonl and --meta-json are mutually exclusive")
-
     if not is_apple_silicon():
         print(
             "metalstat: This tool requires Apple Silicon (arm64 macOS).",
@@ -304,6 +337,29 @@ def main() -> None:
 
     # Handle SIGPIPE
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+    if args.subcommand == "run":
+        from metalstat.runner import run_wrapper
+
+        child_argv = list(args.child_argv)
+        if child_argv and child_argv[0] == "--":
+            child_argv = child_argv[1:]
+        sys.exit(run_wrapper(
+            output_prefix=args.output,
+            interval=args.interval,
+            sample_duration=args.sample_duration,
+            capture=args.capture,
+            child_argv=child_argv,
+        ))
+
+    if args.json:
+        parser.error(
+            "--json was removed in 0.1.4. Use --jsonl for per-sample streaming "
+            "or --meta-json for one-shot static system info."
+        )
+
+    if args.jsonl and args.meta_json:
+        parser.error("--jsonl and --meta-json are mutually exclusive")
 
     opts = _make_display_options(args)
 

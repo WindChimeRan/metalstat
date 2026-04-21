@@ -316,3 +316,56 @@ class TestCLI:
         data = json.loads(r.stdout.strip().splitlines()[0])
         assert data["cpu_util"] is not None
         assert data["pkg_w"] is not None or data["cpu_w"] is not None
+
+
+class TestRunSubcommand:
+    def test_success_produces_meta_and_jsonl(self, tmp_path):
+        prefix = tmp_path / "runtest"
+        r = run_metalstat(
+            "run", "-o", str(prefix), "-i", "0.3", "--sample-duration", "0.1",
+            "--", "sh", "-c", "sleep 0.7",
+        )
+        assert r.returncode == 0
+        meta = json.loads((prefix.with_suffix(".meta.json")).read_text())
+        assert meta["chip"]["name"]
+        assert meta["memory_total_gb"] > 0
+        jsonl_path = prefix.with_suffix(".jsonl")
+        lines = [ln for ln in jsonl_path.read_text().splitlines() if ln.strip()]
+        assert len(lines) >= 1
+        sample = json.loads(lines[0])
+        assert "mem_used_gb" in sample
+        assert "elapsed_s" in sample
+        # No capture log unless --capture
+        assert not prefix.with_suffix(".log").exists()
+
+    def test_exit_code_propagates(self, tmp_path):
+        prefix = tmp_path / "exittest"
+        r = run_metalstat(
+            "run", "-o", str(prefix), "-i", "0.5", "--sample-duration", "0.1",
+            "--", "sh", "-c", "exit 42",
+        )
+        assert r.returncode == 42
+
+    def test_capture_writes_log(self, tmp_path):
+        prefix = tmp_path / "captest"
+        r = run_metalstat(
+            "run", "-o", str(prefix), "-i", "0.5", "--sample-duration", "0.1",
+            "--capture",
+            "--", "sh", "-c", "echo out-line; echo err-line >&2",
+        )
+        assert r.returncode == 0
+        log = prefix.with_suffix(".log").read_bytes().decode()
+        assert "out-line" in log
+        assert "err-line" in log
+
+    def test_nonexistent_command_exits_127(self, tmp_path):
+        prefix = tmp_path / "missing"
+        r = run_metalstat("run", "-o", str(prefix), "--", "/definitely/not/here")
+        assert r.returncode == 127
+        assert "No such file" in r.stderr or "not found" in r.stderr.lower()
+
+    def test_missing_command_errors(self, tmp_path):
+        prefix = tmp_path / "noargs"
+        r = run_metalstat("run", "-o", str(prefix))
+        assert r.returncode != 0
+        assert "no command" in r.stderr.lower()

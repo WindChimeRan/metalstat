@@ -1,6 +1,6 @@
 [project]
 name = "metalstat"
-version = "0.1.4"
+version = "0.1.5"
 description = "Apple Silicon GPU/CPU/Memory monitoring CLI — like gpustat, but for Metal"
 readme = "README.md"
 authors = [

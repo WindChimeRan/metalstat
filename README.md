@@ -34,19 +34,40 @@ metalstat --help
 
 ## Logging an inference job (JSON output)
 
-Two flags produce machine-readable output for scripting and post-hoc analysis:
+The easiest way to log metrics for any inference workload — Python, Rust,
+llama.cpp, Ollama, whatever — is `metalstat run`:
+
+```bash
+# Wrap any command; metalstat writes three sibling files under the -o prefix
+metalstat run -o mytest -i 1 -- ./my_inference --model foo.gguf
+
+# Capture child stdout+stderr alongside the metrics (still tees to terminal)
+metalstat run -o mytest -i 1 --capture -- llama-cli -m model.gguf -p "hi"
+```
+
+This produces:
+
+| file | content |
+|---|---|
+| `mytest.meta.json` | static info (hostname, chip, total memory), written once at start |
+| `mytest.jsonl` | per-tick sample lines, streamed while the child runs |
+| `mytest.log` | child stdout+stderr, only with `--capture` |
+
+The child owns the terminal — tokens stream to stdout as usual. metalstat
+forwards `SIGINT`/`SIGTERM` to the child, waits for it to exit, and exits with
+the child's exit code. No stray background processes to clean up.
+
+For ad-hoc or custom lifecycle management, two lower-level flags produce
+machine-readable output directly:
 
 ```bash
 # One-shot JSON Lines sample (one line of stats, then exit)
 metalstat --jsonl
 
-# Stream samples to a file at 1 Hz (sidecar during an inference run)
-metalstat --jsonl -i 1 > run.jsonl &
-SAMPLER_PID=$!
-python run_inference.py
-kill -INT $SAMPLER_PID
+# Stream samples to stdout at 1 Hz
+metalstat --jsonl -i 1 > run.jsonl
 
-# Static system info (hostname, chip, total memory) — pair with run.jsonl
+# Static system info (hostname, chip, total memory) — pair with a .jsonl stream
 metalstat --meta-json > run.meta.json
 ```
 
