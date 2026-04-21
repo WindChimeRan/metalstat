@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import sys
 import time
@@ -430,3 +431,27 @@ class AppleSiliconStat:
                 bytes_to_gib(mem.metal_recommended_max), 2
             ),
         }
+
+
+def sample_json(sample_duration: float, start_time: float | None = None) -> str:
+    """Query one sample and serialize it as a JSONL record (no trailing newline)."""
+    stat = AppleSiliconStat.new_query(
+        sample_duration=sample_duration,
+        query_cpu=True,
+        query_gpu=True,
+        query_power=True,
+        query_procs=0,
+    )
+    return json.dumps(stat.to_sample_dict(start_time=start_time))
+
+
+def meta_json() -> str:
+    """Gather static system info and serialize as an indented JSON object."""
+    stat = AppleSiliconStat.new_query(
+        sample_duration=0.0,
+        query_cpu=False,
+        query_gpu=False,
+        query_power=False,
+        query_procs=0,
+    )
+    return json.dumps(stat.to_meta_dict(), indent=2)

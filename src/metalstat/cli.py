@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import signal
 import sys
 import time
@@ -11,7 +10,7 @@ import traceback
 from typing import Callable
 
 from metalstat import __version__
-from metalstat.core import AppleSiliconStat, DisplayOptions
+from metalstat.core import AppleSiliconStat, DisplayOptions, meta_json, sample_json
 from metalstat.sysinfo import is_apple_silicon
 
 
@@ -145,19 +144,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="subcommand")
     run_parser = subparsers.add_parser(
         "run",
-        help="Wrap a child command and log metrics for its lifetime",
+        help="Wrap a command and log system metrics for its lifetime",
         description=(
-            "Run a child command with a metalstat sampler attached. Writes "
-            "PREFIX.meta.json (static info) and PREFIX.jsonl (per-tick samples) "
-            "while the child runs. With --capture, also writes PREFIX.log "
-            "containing the child's stdout+stderr."
+            "Wrap a child command and log system metrics while it runs. "
+            "Produces PREFIX.meta.json (static info) and PREFIX.jsonl "
+            "(per-tick samples) under `-o PREFIX`. Add --capture to also "
+            "archive the child's stdout+stderr to PREFIX.log."
         ),
     )
     run_parser.add_argument(
         "-o", "--output",
         required=True,
         metavar="PREFIX",
-        help="Output file prefix. Produces PREFIX.jsonl, PREFIX.meta.json, and (with --capture) PREFIX.log.",
+        help="Output file prefix. Produces PREFIX.meta.json, PREFIX.jsonl, and (with --capture) PREFIX.log.",
     )
     run_parser.add_argument(
         "-i", "--interval",
@@ -176,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--capture",
         action="store_true",
-        help="Tee the child's stdout+stderr to PREFIX.log (terminal view preserved)",
+        help="Also archive the child's stdout+stderr to PREFIX.log (terminal view preserved)",
     )
     run_parser.add_argument(
         "child_argv",
@@ -231,30 +230,13 @@ def _query_and_print(args: argparse.Namespace, opts: DisplayOptions) -> None:
 
 
 def _emit_meta_json() -> None:
-    """Emit static system info as a single indented JSON object."""
-    # No sampling needed — chip and memory totals are static.
-    stat = AppleSiliconStat.new_query(
-        sample_duration=0.0,
-        query_cpu=False,
-        query_gpu=False,
-        query_power=False,
-        query_procs=0,
-    )
-    print(json.dumps(stat.to_meta_dict(), indent=2))
+    print(meta_json())
 
 
 def _emit_sample_line(
     sample_duration: float, start_time: float | None = None
 ) -> None:
-    """Query once and write one JSONL sample line to stdout."""
-    stat = AppleSiliconStat.new_query(
-        sample_duration=sample_duration,
-        query_cpu=True,
-        query_gpu=True,
-        query_power=True,
-        query_procs=0,
-    )
-    sys.stdout.write(json.dumps(stat.to_sample_dict(start_time=start_time)) + "\n")
+    sys.stdout.write(sample_json(sample_duration, start_time) + "\n")
     sys.stdout.flush()
 
 

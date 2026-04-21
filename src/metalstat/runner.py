@@ -6,35 +6,25 @@ Writes three sibling files under a `-o PREFIX`:
 - `PREFIX.log`       : child stdout+stderr (merged), only when `--capture` is set
 
 The child inherits stdin and (by default) stdout/stderr, so it behaves exactly
-as if invoked directly. SIGINT and SIGTERM delivered to metalstat are forwarded
-to the child; metalstat exits with the child's exit code.
+as if invoked directly. SIGHUP/SIGINT/SIGTERM delivered to metalstat are
+forwarded to the child; metalstat exits with the child's exit code.
 """
 
 from __future__ import annotations
 
-import json
 import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
-from metalstat.core import AppleSiliconStat
+from metalstat.core import meta_json, sample_json
 
 
 def _write_meta_file(path: Path) -> None:
-    stat = AppleSiliconStat.new_query(
-        sample_duration=0.0,
-        query_cpu=False,
-        query_gpu=False,
-        query_power=False,
-        query_procs=0,
-    )
-    with path.open("w") as f:
-        json.dump(stat.to_meta_dict(), f, indent=2)
-        f.write("\n")
+    path.write_text(meta_json() + "\n")
 
 
 def _sampler_thread(
@@ -50,23 +40,15 @@ def _sampler_thread(
             while not stop_event.is_set():
                 t0 = time.monotonic()
                 try:
-                    stat = AppleSiliconStat.new_query(
-                        sample_duration=sample_duration,
-                        query_cpu=True,
-                        query_gpu=True,
-                        query_power=True,
-                        query_procs=0,
-                    )
-                    line = json.dumps(stat.to_sample_dict(start_time=start_time))
-                    f.write(line + "\n")
+                    f.write(sample_json(sample_duration, start_time) + "\n")
                     f.flush()
                 except Exception as e:
                     # Keep sampling — child is more important than any one tick.
                     print(f"metalstat: sampler tick failed: {e}", file=sys.stderr)
 
-                deadline = t0 + interval
-                while not stop_event.is_set() and time.monotonic() < deadline:
-                    stop_event.wait(timeout=min(0.1, deadline - time.monotonic()))
+                remaining = t0 + interval - time.monotonic()
+                if remaining > 0:
+                    stop_event.wait(timeout=remaining)
     except Exception as e:
         print(f"metalstat: sampler crashed: {e}", file=sys.stderr)
 
@@ -81,6 +63,9 @@ def _tee_thread(src: IO[bytes], term_fp: IO[bytes], log_fp: IO[bytes]) -> None:
             log_fp.flush()
     except Exception as e:
         print(f"metalstat: capture thread error: {e}", file=sys.stderr)
+
+
+_FORWARDED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def run_wrapper(
@@ -112,14 +97,29 @@ def run_wrapper(
     )
     sampler.start()
 
-    popen_kwargs: dict = {}
-    log_fp: IO[bytes] | None = None
-    tee: threading.Thread | None = None
-
+    popen_kwargs: dict[str, Any] = {}
     if capture:
         popen_kwargs["stdout"] = subprocess.PIPE
         popen_kwargs["stderr"] = subprocess.STDOUT
         popen_kwargs["bufsize"] = 0
+
+    proc: subprocess.Popen | None = None
+    log_fp: IO[bytes] | None = None
+    tee: threading.Thread | None = None
+
+    # Install signal forwarding BEFORE Popen to close the race where a signal
+    # delivered between Popen returning and the handlers being installed would
+    # orphan the child.
+    def forward(sig, frame):
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.send_signal(sig)
+            except ProcessLookupError:
+                pass
+
+    prev_handlers = [
+        (sig, signal.signal(sig, forward)) for sig in _FORWARDED_SIGNALS
+    ]
 
     try:
         try:
@@ -128,8 +128,7 @@ def run_wrapper(
             print(f"metalstat run: {e}", file=sys.stderr)
             return 127
 
-        if capture:
-            assert log_path is not None and proc.stdout is not None
+        if capture and log_path is not None and proc.stdout is not None:
             log_fp = log_path.open("wb")
             tee = threading.Thread(
                 target=_tee_thread,
@@ -138,27 +137,15 @@ def run_wrapper(
             )
             tee.start()
 
-        def forward(sig, frame):
-            if proc.poll() is None:
-                try:
-                    proc.send_signal(sig)
-                except ProcessLookupError:
-                    pass
-
-        prev_int = signal.signal(signal.SIGINT, forward)
-        prev_term = signal.signal(signal.SIGTERM, forward)
-
-        try:
-            proc.wait()
-        finally:
-            signal.signal(signal.SIGINT, prev_int)
-            signal.signal(signal.SIGTERM, prev_term)
+        proc.wait()
 
         if tee is not None:
             tee.join(timeout=2.0)
 
         return proc.returncode
     finally:
+        for sig, prev in prev_handlers:
+            signal.signal(sig, prev)
         stop_event.set()
         sampler.join(timeout=interval + sample_duration + 1.0)
         if log_fp is not None:
