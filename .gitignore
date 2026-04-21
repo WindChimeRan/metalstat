@@ -6,5 +6,7 @@ dist/
 build/
 .eggs/
 
+.DS_Store
+
 debug_ioreport.py
 gpu_dvfs_table.py
