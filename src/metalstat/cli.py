@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 import time
 import traceback
+from typing import Callable
 
 from metalstat import __version__
 from metalstat.core import AppleSiliconStat, DisplayOptions
@@ -72,10 +74,25 @@ def build_parser() -> argparse.ArgumentParser:
     # Output options
     output = parser.add_argument_group("output options")
     output.add_argument(
+        "--jsonl",
+        action="store_true",
+        help=(
+            "Emit JSON Lines samples to stdout (one line per -i tick, or a "
+            "single line and exit when -i is omitted)"
+        ),
+    )
+    output.add_argument(
+        "--meta-json",
+        action="store_true",
+        dest="meta_json",
+        help="Emit static system info as a single JSON object and exit",
+    )
+    # Removed in 0.1.4 — registered here so prefix-matching doesn't silently
+    # route `--json` to `--jsonl`, and so users get a useful migration message.
+    output.add_argument(
         "--json",
         action="store_true",
-        dest="json_output",
-        help="Output in JSON format",
+        help=argparse.SUPPRESS,
     )
     output.add_argument(
         "--no-color",
@@ -134,7 +151,7 @@ def _determine_color(args: argparse.Namespace) -> bool:
         return False
     if args.color:
         return True
-    if args.json_output:
+    if args.jsonl or args.meta_json:
         return False
     return sys.stdout.isatty()
 
@@ -152,12 +169,11 @@ def _make_display_options(args: argparse.Namespace) -> DisplayOptions:
         num_procs=args.num_procs,
         color=_determine_color(args),
         header=not args.no_header,
-        json_output=args.json_output,
     )
 
 
 def _query_and_print(args: argparse.Namespace, opts: DisplayOptions) -> None:
-    """Perform one query and print results."""
+    """Perform one query and print formatted output."""
     needs_gpu = True
     needs_power = opts.show_power or opts.show_ane
     needs_cpu = opts.show_cpu
@@ -169,11 +185,68 @@ def _query_and_print(args: argparse.Namespace, opts: DisplayOptions) -> None:
         query_power=needs_power,
         query_procs=opts.num_procs if opts.show_procs else 0,
     )
+    stat.print_formatted(opts)
 
-    if opts.json_output:
-        stat.print_json()
-    else:
-        stat.print_formatted(opts)
+
+def _emit_meta_json() -> None:
+    """Emit static system info as a single indented JSON object."""
+    # No sampling needed — chip and memory totals are static.
+    stat = AppleSiliconStat.new_query(
+        sample_duration=0.0,
+        query_cpu=False,
+        query_gpu=False,
+        query_power=False,
+        query_procs=0,
+    )
+    print(json.dumps(stat.to_meta_dict(), indent=2))
+
+
+def _emit_sample_line(
+    sample_duration: float, start_time: float | None = None
+) -> None:
+    """Query once and write one JSONL sample line to stdout."""
+    stat = AppleSiliconStat.new_query(
+        sample_duration=sample_duration,
+        query_cpu=True,
+        query_gpu=True,
+        query_power=True,
+        query_procs=0,
+    )
+    sys.stdout.write(json.dumps(stat.to_sample_dict(start_time=start_time)) + "\n")
+    sys.stdout.flush()
+
+
+def _run_interval_loop(interval: float, tick: Callable[[], None]) -> None:
+    """Call `tick` every `interval` seconds until SIGINT.
+
+    Sleeps in ~100ms slices so SIGINT is handled promptly.
+    """
+    stop = False
+
+    def on_sigint(sig, frame):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGINT, on_sigint)
+
+    try:
+        while not stop:
+            t0 = time.monotonic()
+            tick()
+            deadline = t0 + interval
+            while time.monotonic() < deadline and not stop:
+                time.sleep(min(0.1, deadline - time.monotonic()))
+    except KeyboardInterrupt:
+        pass
+
+
+def _jsonl_stream(args: argparse.Namespace) -> None:
+    """Stream JSONL samples to stdout at the given interval."""
+    start_time = time.time()
+    _run_interval_loop(
+        args.interval,
+        lambda: _emit_sample_line(args.sample_duration, start_time=start_time),
+    )
 
 
 def _watch_loop(args: argparse.Namespace, opts: DisplayOptions) -> None:
@@ -184,55 +257,43 @@ def _watch_loop(args: argparse.Namespace, opts: DisplayOptions) -> None:
     from rich.live import Live
     from rich.text import Text
 
-    interval = args.interval
     console = Console(
         force_terminal=opts.color if opts.color else None,
         no_color=not opts.color,
         highlight=False,
     )
 
-    stop = False
-
-    def on_sigint(sig, frame):
-        nonlocal stop
-        stop = True
-
-    signal.signal(signal.SIGINT, on_sigint)
-
-    needs_gpu = True
     needs_power = opts.show_power or opts.show_ane
     needs_cpu = opts.show_cpu
 
-    try:
-        with Live(console=console, refresh_per_second=4, screen=True) as live:
-            while not stop:
-                t0 = time.monotonic()
+    with Live(console=console, refresh_per_second=4, screen=True) as live:
+        def tick() -> None:
+            stat = AppleSiliconStat.new_query(
+                sample_duration=args.sample_duration,
+                query_cpu=needs_cpu,
+                query_gpu=True,
+                query_power=needs_power,
+                query_procs=opts.num_procs if opts.show_procs else 0,
+            )
+            buf = StringIO()
+            stat.print_formatted(opts, fp=buf)
+            live.update(Text.from_ansi(buf.getvalue()))
 
-                stat = AppleSiliconStat.new_query(
-                    sample_duration=args.sample_duration,
-                    query_cpu=needs_cpu,
-                    query_gpu=needs_gpu,
-                    query_power=needs_power,
-                    query_procs=opts.num_procs if opts.show_procs else 0,
-                )
-
-                # Render to a string buffer, then display via Live
-                buf = StringIO()
-                stat.print_formatted(opts, fp=buf)
-                live.update(Text.from_ansi(buf.getvalue()))
-
-                elapsed = time.monotonic() - t0
-                remaining = max(0, interval - elapsed)
-                deadline = time.monotonic() + remaining
-                while time.monotonic() < deadline and not stop:
-                    time.sleep(min(0.1, deadline - time.monotonic()))
-    except KeyboardInterrupt:
-        pass
+        _run_interval_loop(args.interval, tick)
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.json:
+        parser.error(
+            "--json was removed in 0.1.4. Use --jsonl for per-sample streaming "
+            "or --meta-json for one-shot static system info."
+        )
+
+    if args.jsonl and args.meta_json:
+        parser.error("--jsonl and --meta-json are mutually exclusive")
 
     if not is_apple_silicon():
         print(
@@ -247,7 +308,14 @@ def main() -> None:
     opts = _make_display_options(args)
 
     try:
-        if args.interval is not None:
+        if args.meta_json:
+            _emit_meta_json()
+        elif args.jsonl:
+            if args.interval is not None:
+                _jsonl_stream(args)
+            else:
+                _emit_sample_line(sample_duration=args.sample_duration)
+        elif args.interval is not None:
             _watch_loop(args, opts)
         else:
             _query_and_print(args, opts)

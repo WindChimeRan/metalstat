@@ -171,24 +171,52 @@ class TestCore:
         assert stat.memory.total > 0
         assert stat.gpu is not None
 
-    def test_to_dict(self):
+    def test_to_meta_dict(self):
         from metalstat.core import AppleSiliconStat
         stat = AppleSiliconStat.new_query(sample_duration=0.1)
-        d = stat.to_dict()
+        d = stat.to_meta_dict()
         assert "hostname" in d
         assert "chip" in d
-        assert "memory" in d
-        assert "gpu" in d
+        assert d["chip"]["name"]
+        assert d["memory_total_gb"] > 0
+        assert d["gpu_mem_recommended_max_gb"] >= 0
+        # Static-only: nothing dynamic should appear here
+        assert "gpu_util" not in d
+        assert "cpu_util" not in d
+        assert "top_processes" not in d
 
-    def test_json_output(self):
+    def test_to_sample_dict_flat_and_all_fields(self):
         from metalstat.core import AppleSiliconStat
-        import io
         stat = AppleSiliconStat.new_query(sample_duration=0.1)
-        buf = io.StringIO()
-        stat.print_json(fp=buf)
-        data = json.loads(buf.getvalue())
-        assert data["chip"]["name"]
-        assert data["memory"]["total_gb"] > 0
+        s = stat.to_sample_dict()
+        # Flat — no nested dicts
+        for v in s.values():
+            assert not isinstance(v, dict), f"sample dict should be flat: {s}"
+        # elapsed_s defaults to 0 when no start_time supplied
+        assert s["elapsed_s"] == 0.0
+        assert s["t"] > 0
+        # Required sample fields always present (None if unavailable)
+        for key in (
+            "gpu_util", "gpu_freq_mhz",
+            "cpu_util", "cpu_p_util", "cpu_e_util",
+            "mem_used_gb", "mem_wired_gb", "mem_active_gb",
+            "mem_inactive_gb", "mem_compressed_gb",
+            "mem_pressure_pct", "mem_pressure_level",
+            "gpu_mem_allocated_gb", "swap_used_gb",
+            "cpu_w", "gpu_w", "ane_w", "dram_w", "pkg_w",
+        ):
+            assert key in s, f"missing key {key}"
+        assert s["mem_used_gb"] > 0
+        # top_processes explicitly excluded from stream schema
+        assert "top_processes" not in s
+        assert "top_procs" not in s
+
+    def test_to_sample_dict_elapsed(self):
+        from metalstat.core import AppleSiliconStat
+        stat = AppleSiliconStat.new_query(sample_duration=0.1)
+        t = stat.query_time.timestamp()
+        s = stat.to_sample_dict(start_time=t - 5.0)
+        assert 4.9 <= s["elapsed_s"] <= 5.1
 
     def test_formatted_output(self):
         from metalstat.core import AppleSiliconStat, DisplayOptions
@@ -223,13 +251,37 @@ class TestCLI:
         assert "GB" in r.stdout
         assert "GPU" in r.stdout
 
-    def test_json_output(self):
-        r = run_metalstat("--json")
+    def test_jsonl_oneshot(self):
+        r = run_metalstat("--jsonl")
+        assert r.returncode == 0
+        lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
+        assert len(lines) == 1
+        data = json.loads(lines[0])
+        # Flat sample schema
+        assert "t" in data
+        assert "elapsed_s" in data
+        assert data["elapsed_s"] == 0.0
+        assert "mem_used_gb" in data
+        assert "gpu_util" in data
+
+    def test_meta_json(self):
+        r = run_metalstat("--meta-json")
         assert r.returncode == 0
         data = json.loads(r.stdout)
-        assert "chip" in data
-        assert "memory" in data
-        assert "gpu" in data
+        assert "hostname" in data
+        assert data["chip"]["name"]
+        assert data["memory_total_gb"] > 0
+        # No dynamic fields leak in
+        assert "gpu_util" not in data
+
+    def test_jsonl_and_meta_json_mutually_exclusive(self):
+        r = run_metalstat("--jsonl", "--meta-json")
+        assert r.returncode != 0
+        assert "mutually exclusive" in r.stderr
+
+    def test_json_flag_removed(self):
+        r = run_metalstat("--json")
+        assert r.returncode != 0
 
     def test_show_all(self):
         r = run_metalstat("-a", "--no-color")
@@ -256,10 +308,11 @@ class TestCLI:
         # First line should be the status line, not hostname
         assert "Apple" in lines[0]
 
-    def test_json_all(self):
-        r = run_metalstat("-a", "--json")
+    def test_jsonl_has_cpu_and_power_without_flags(self):
+        # --jsonl always queries CPU + GPU + power regardless of display flags,
+        # so analysis pipelines get a uniform schema.
+        r = run_metalstat("--jsonl")
         assert r.returncode == 0
-        data = json.loads(r.stdout)
-        assert "cpu" in data
-        assert "power" in data
-        assert data["cpu"]["utilization"] is not None
+        data = json.loads(r.stdout.strip().splitlines()[0])
+        assert data["cpu_util"] is not None
+        assert data["pkg_w"] is not None or data["cpu_w"] is not None

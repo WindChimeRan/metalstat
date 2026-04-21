@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 
+def round_or_none(x: float | None, n: int) -> float | None:
+    return round(x, n) if x is not None else None
+
+
 def bytes_to_gib(b: int | float) -> float:
     return b / (1024 ** 3)
 

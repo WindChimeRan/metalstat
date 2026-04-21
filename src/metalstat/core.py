@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import socket
 import sys
 import time
@@ -21,7 +20,7 @@ from metalstat.memory import MemoryMetrics, get_memory_metrics
 from metalstat.power import PowerMetrics, parse_power_metrics
 from metalstat.procs import ProcessInfo, get_top_processes, _format_gpu_time
 from metalstat.sysinfo import ChipInfo, get_chip_info, get_gpu_dvfs_freqs, is_apple_silicon
-from metalstat.util import bytes_to_gib, format_gib, pct_style, pressure_style
+from metalstat.util import bytes_to_gib, format_gib, pct_style, pressure_style, round_or_none
 
 
 @dataclass
@@ -37,7 +36,6 @@ class DisplayOptions:
     num_procs: int = 8
     color: bool = True
     header: bool = True
-    json_output: bool = False
 
 
 _sampler_cache: dict[str, Any] = {}
@@ -369,9 +367,51 @@ class AppleSiliconStat:
 
             console.print(proc_tbl)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to a JSON-serializable dictionary."""
-        d: dict[str, Any] = {
+    def to_sample_dict(self, start_time: float | None = None) -> dict[str, Any]:
+        """Flat per-sample dict for JSONL streaming.
+
+        `start_time` is the wall-clock reference point (unix seconds) for
+        `elapsed_s`. When None, defaults to this sample's own timestamp, so a
+        standalone one-shot has `elapsed_s == 0.0`.
+        """
+        t = self.query_time.timestamp()
+        if start_time is None:
+            start_time = t
+        elapsed_s = t - start_time
+
+        mem = self.memory
+        gpu = self.gpu
+        cpu = self.cpu
+        pw = self.power
+
+        return {
+            "t": round(t, 3),
+            "elapsed_s": round(elapsed_s, 3),
+            "gpu_util": round_or_none(gpu.utilization if gpu else None, 1),
+            "gpu_freq_mhz": gpu.frequency_mhz if gpu else None,
+            "cpu_util": round_or_none(cpu.utilization_total if cpu else None, 1),
+            "cpu_p_util": round_or_none(cpu.utilization_p_cluster if cpu else None, 1),
+            "cpu_e_util": round_or_none(cpu.utilization_e_cluster if cpu else None, 1),
+            "mem_used_gb": round(bytes_to_gib(mem.used), 2),
+            "mem_wired_gb": round(bytes_to_gib(mem.wired), 2),
+            "mem_active_gb": round(bytes_to_gib(mem.active), 2),
+            "mem_inactive_gb": round(bytes_to_gib(mem.inactive), 2),
+            "mem_compressed_gb": round(bytes_to_gib(mem.compressed), 2),
+            "mem_pressure_pct": round(mem.pressure_percent, 1),
+            "mem_pressure_level": mem.pressure_level,
+            "gpu_mem_allocated_gb": round(bytes_to_gib(mem.metal_allocated), 2),
+            "swap_used_gb": round(bytes_to_gib(mem.swap_used), 2),
+            "cpu_w": round_or_none(pw.cpu_w if pw else None, 2),
+            "gpu_w": round_or_none(pw.gpu_w if pw else None, 2),
+            "ane_w": round_or_none(pw.ane_w if pw else None, 2),
+            "dram_w": round_or_none(pw.dram_w if pw else None, 2),
+            "pkg_w": round_or_none(pw.package_w if pw else None, 2),
+        }
+
+    def to_meta_dict(self) -> dict[str, Any]:
+        """Static per-machine info — emit once, separately from samples."""
+        mem = self.memory
+        return {
             "hostname": self.hostname,
             "query_time": self.query_time.isoformat(),
             "chip": {
@@ -384,99 +424,9 @@ class AppleSiliconStat:
                 "gpu_cores": self.chip.gpu_cores,
                 "metal_family": self.chip.metal_family,
             },
-            "memory": {
-                "total_gb": round(bytes_to_gib(self.memory.total), 2),
-                "used_gb": round(bytes_to_gib(self.memory.used), 2),
-                "available_gb": round(bytes_to_gib(self.memory.available), 2),
-                "wired_gb": round(bytes_to_gib(self.memory.wired), 2),
-                "active_gb": round(bytes_to_gib(self.memory.active), 2),
-                "inactive_gb": round(bytes_to_gib(self.memory.inactive), 2),
-                "compressed_gb": round(bytes_to_gib(self.memory.compressed), 2),
-                "pressure_percent": round(self.memory.pressure_percent, 1),
-                "pressure_level": self.memory.pressure_level,
-            },
-            "swap": {
-                "used_gb": round(bytes_to_gib(self.memory.swap_used), 2),
-                "total_gb": round(bytes_to_gib(self.memory.swap_total), 2),
-            },
-            "gpu_memory": {
-                "allocated_gb": round(
-                    bytes_to_gib(self.memory.metal_allocated), 2
-                ),
-                "recommended_max_gb": round(
-                    bytes_to_gib(self.memory.metal_recommended_max), 2
-                ),
-            },
+            "memory_total_gb": round(bytes_to_gib(mem.total), 2),
+            "swap_total_gb": round(bytes_to_gib(mem.swap_total), 2),
+            "gpu_mem_recommended_max_gb": round(
+                bytes_to_gib(mem.metal_recommended_max), 2
+            ),
         }
-
-        if self.gpu:
-            d["gpu"] = {
-                "utilization": (
-                    round(self.gpu.utilization, 1)
-                    if self.gpu.utilization is not None
-                    else None
-                ),
-                "frequency_mhz": self.gpu.frequency_mhz,
-            }
-
-        if self.cpu:
-            d["cpu"] = {
-                "utilization": round(self.cpu.utilization_total, 1),
-                "utilization_p_cluster": (
-                    round(self.cpu.utilization_p_cluster, 1)
-                    if self.cpu.utilization_p_cluster is not None
-                    else None
-                ),
-                "utilization_e_cluster": (
-                    round(self.cpu.utilization_e_cluster, 1)
-                    if self.cpu.utilization_e_cluster is not None
-                    else None
-                ),
-            }
-
-        if self.power:
-            d["power"] = {
-                "cpu_w": (
-                    round(self.power.cpu_w, 2)
-                    if self.power.cpu_w is not None
-                    else None
-                ),
-                "gpu_w": (
-                    round(self.power.gpu_w, 2)
-                    if self.power.gpu_w is not None
-                    else None
-                ),
-                "ane_w": (
-                    round(self.power.ane_w, 2)
-                    if self.power.ane_w is not None
-                    else None
-                ),
-                "dram_w": (
-                    round(self.power.dram_w, 2)
-                    if self.power.dram_w is not None
-                    else None
-                ),
-                "package_w": (
-                    round(self.power.package_w, 2)
-                    if self.power.package_w is not None
-                    else None
-                ),
-            }
-
-        if self.top_procs:
-            d["top_processes"] = [
-                {
-                    "pid": p.pid,
-                    "name": p.name,
-                    "rss_gb": round(bytes_to_gib(p.rss_bytes), 2),
-                    "cpu_percent": round(p.cpu_percent, 1),
-                    "gpu_time_ns": p.gpu_time_ns,
-                }
-                for p in self.top_procs
-            ]
-
-        return d
-
-    def print_json(self, fp: IO[str] = sys.stdout) -> None:
-        """Print JSON output."""
-        print(json.dumps(self.to_dict(), indent=2), file=fp)

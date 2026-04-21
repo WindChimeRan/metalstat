@@ -32,6 +32,51 @@ metalstat -a -i 1
 metalstat --help
 ```
 
+## Logging an inference job (JSON output)
+
+Two flags produce machine-readable output for scripting and post-hoc analysis:
+
+```bash
+# One-shot JSON Lines sample (one line of stats, then exit)
+metalstat --jsonl
+
+# Stream samples to a file at 1 Hz (sidecar during an inference run)
+metalstat --jsonl -i 1 > run.jsonl &
+SAMPLER_PID=$!
+python run_inference.py
+kill -INT $SAMPLER_PID
+
+# Static system info (hostname, chip, total memory) — pair with run.jsonl
+metalstat --meta-json > run.meta.json
+```
+
+`--jsonl` always collects CPU, GPU, and power regardless of other flags, so
+the schema stays uniform across runs. Each sample line is a flat object:
+
+| field | meaning |
+|---|---|
+| `t` | wall-clock time (unix seconds, float) |
+| `elapsed_s` | seconds since first sample in this stream |
+| `gpu_util`, `gpu_freq_mhz` | GPU utilization (0-100) and frequency |
+| `cpu_util`, `cpu_p_util`, `cpu_e_util` | total / P-cluster / E-cluster utilization |
+| `mem_used_gb`, `mem_wired_gb`, `mem_active_gb`, `mem_inactive_gb`, `mem_compressed_gb` | memory breakdown (GiB, labeled `_gb`) |
+| `mem_pressure_pct`, `mem_pressure_level` | memory pressure (`green` / `yellow` / `red`) |
+| `gpu_mem_allocated_gb` | Metal GPU memory currently allocated |
+| `swap_used_gb` | swap in use |
+| `cpu_w`, `gpu_w`, `ane_w`, `dram_w`, `pkg_w` | power draw per rail (watts) |
+
+All numeric fields are `null` when unavailable. Every line has the same keys,
+so it loads directly into pandas:
+
+```python
+import pandas as pd
+df = pd.read_json("run.jsonl", lines=True)
+df.plot(x="elapsed_s", y=["gpu_util", "cpu_util"])
+```
+
+Sizes suffixed `_gb` are GiB (1024³ bytes), matching what the formatted view
+displays.
+
 ## Understanding Apple Silicon memory (vs. CUDA)
 
 Apple Silicon uses **Unified Memory Architecture (UMA)** — the CPU and GPU share
@@ -83,7 +128,7 @@ overhead, but you're sharing that memory budget with the rest of the system.
 ## Requirements
 
 - macOS on Apple Silicon (M1/M2/M3/M4)
-- Python 3.10+
+- Python 3.9+
 
 ## License
 
